@@ -11,26 +11,15 @@ echo $unamestr
 echo $TRAVIS_TAG
 if [[ "$unamestr" == 'Linux' && -n $TRAVIS_TAG ]]
 then
-    git clone https://github.com:${GITHUB_TOKEN}@github.com/${WALLET_REPO} $TRAVIS_BUILD_DIR/wallet
-
-    # Copy new compile files
-    ########################
-    #echo "Copying compiled files over to repo"
-    #ls -al $TRAVIS_BUILD_DIR/web/dist/
-    #ls -al /gh-pages/
-    rm -rf $TRAVIS_BUILD_DIR/wallet/wallet/*
-    cp -Rv $TRAVIS_BUILD_DIR/build/hash-history/* $TRAVIS_BUILD_DIR/wallet/wallet/
-
-    # Commit Changes
-    ################
-    echo "Pushing new wallet repo"
-    cd $TRAVIS_BUILD_DIR/wallet
-    #git config user.email "travis@bitshares.org"
-    #git config user.name "BitShares Wallet Build Automation"
+    ## wallet.bitshares.org subdomain (independent repo)
+    echo "Pushing new wallet subdomain repo"
+    git clone https://github.com:${GITHUB_TOKEN}@github.com/${WALLET_REPO} $TRAVIS_BUILD_DIR/wallet.bitshares.org
+    cd $TRAVIS_BUILD_DIR/wallet.bitshares.org
+    git checkout gh-pages
+    rm -rf ./*
+    git checkout ./CNAME
+    cp -Rv $TRAVIS_BUILD_DIR/build/hash-history/* .
     git add -A
     git commit -a -m "Update wallet by Travis: v$TRAVIS_TAG"
-
-    # Push Changes
-    ##############
     git push
 fi

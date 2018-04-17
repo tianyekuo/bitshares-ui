@@ -5,14 +5,15 @@ import ChainTypes from "components/Utility/ChainTypes";
 import BindToChainState from "components/Utility/BindToChainState";
 import WithdrawModalBlocktrades from "./WithdrawModalBlocktrades";
 import BaseModal from "../../Modal/BaseModal";
-import Trigger from "react-foundation-apps/src/trigger";
 import ZfApi from "react-foundation-apps/src/utils/foundation-api";
 import AccountBalance from "../../Account/AccountBalance";
 import BlockTradesDepositAddressCache from "common/BlockTradesDepositAddressCache";
 import AssetName from "components/Utility/AssetName";
-import LinkToAccountById from "components/Blockchain/LinkToAccountById";
-import {requestDepositAddress} from "common/blockTradesMethods";
-import { blockTradesAPIs } from "api/apiConfig";
+import LinkToAccountById from "components/Utility/LinkToAccountById";
+import { requestDepositAddress, getDepositAddress } from "common/blockTradesMethods";
+import { blockTradesAPIs, openledgerAPIs } from "api/apiConfig";
+import LoadingIndicator from "components/LoadingIndicator";
+import counterpart from "counterpart";
 
 class BlockTradesGatewayDepositRequest extends React.Component {
     static propTypes = {
@@ -39,16 +40,17 @@ class BlockTradesGatewayDepositRequest extends React.Component {
 
     constructor(props) {
         super(props);
-        this.deposit_address_cache = new BlockTradesDepositAddressCache();
 
         let urls = {
             blocktrades: blockTradesAPIs.BASE,
-            openledger: blockTradesAPIs.BASE_OL
+            openledger: openledgerAPIs.BASE
         };
 
         this.state = {
             receive_address: null,
-            url: props.url || urls[props.gateway]
+            url: props.url || urls[props.gateway],
+            loading: false,
+            emptyAddressDeposit: false
         };
 
         this.addDepositAddress = this.addDepositAddress.bind(this);
@@ -58,7 +60,10 @@ class BlockTradesGatewayDepositRequest extends React.Component {
 
     _copy(e) {
         try {
-            e.clipboardData.setData("text/plain", this.state.clipboardText);
+            if (this.state.clipboardText)
+                e.clipboardData.setData("text/plain", this.state.clipboardText);
+            else
+                e.clipboardData.setData("text/plain", counterpart.translate("gateway.use_copy_button").toUpperCase());
             e.preventDefault();
         } catch(err) {
             console.error(err);
@@ -76,21 +81,37 @@ class BlockTradesGatewayDepositRequest extends React.Component {
     }
 
     componentWillMount() {
-        let account_name = this.props.account.get("name");
-        let receive_address = this.deposit_address_cache.getCachedInputAddress(this.props.gateway, account_name, this.props.deposit_coin_type, this.props.receive_coin_type);
-        if (!receive_address) {
-            requestDepositAddress(this._getDepositObject());
-        }
+        getDepositAddress({coin: this.props.receive_coin_type,  account: this.props.account.get("name"),  stateCallback: this.addDepositAddress});
     }
 
     componentWillUnmount() {
         document.removeEventListener("copy", this._copy);
     }
 
+    componentWillReceiveProps(np) {
+        if (np.account !== this.props.account) {
+            getDepositAddress({coin: np.receive_coin_type,  account: np.account.get("name"),  stateCallback: this.addDepositAddress});
+        }
+    }
+
     addDepositAddress( receive_address ) {
-        let account_name = this.props.account.get("name");
-        this.deposit_address_cache.cacheInputAddress(this.props.gateway, account_name, this.props.deposit_coin_type, this.props.receive_coin_type, receive_address.address, receive_address.memo);
+        if(receive_address.error){
+            receive_address.error.message === "no_address" ? this.setState({emptyAddressDeposit: true}) : this.setState({emptyAddressDeposit: false})
+        }
+
         this.setState( {receive_address} );
+        this.setState({
+            loading: false
+        });
+        this.setState( {receive_address} );
+    }
+
+    requestDepositAddressLoad(){
+        this.setState({
+            loading: true,
+            emptyAddressDeposit: false
+        });
+        requestDepositAddress(this._getDepositObject());
     }
 
     getWithdrawModalId() {
@@ -114,8 +135,8 @@ class BlockTradesGatewayDepositRequest extends React.Component {
     }
 
     render() {
-
-        let emptyRow = <div style={{display:"none", minHeight: 150}}></div>;
+        const isDeposit = this.props.action === "deposit";
+        let emptyRow = <LoadingIndicator />;
         if( !this.props.account || !this.props.issuer_account || !this.props.receive_asset )
             return emptyRow;
 
@@ -153,14 +174,11 @@ class BlockTradesGatewayDepositRequest extends React.Component {
         // }
 
         let receive_address = this.state.receive_address;
-        if( !receive_address )  {
-            let account_name = this.props.account.get("name");
-            receive_address = this.deposit_address_cache.getCachedInputAddress(this.props.gateway, account_name, this.props.deposit_coin_type, this.props.receive_coin_type);
-        }
+        let { emptyAddressDeposit } = this.state;
+        let indicatorButtonAddr = this.state.loading;
 
-        if( !receive_address ) {
-            requestDepositAddress(this._getDepositObject());
-            return emptyRow;
+        if( !receive_address) {
+            return <div style={{margin: "3rem"}}><LoadingIndicator type="three-bounce"/></div>;
         }
 
         let withdraw_modal_id = this.getWithdrawModalId();
@@ -200,7 +218,11 @@ class BlockTradesGatewayDepositRequest extends React.Component {
             var withdraw_memo_prefix = "";
         }
 
-        if (this.props.action === "deposit") {
+        if (!this.props.isAvailable || (isDeposit && !this.props.deposit_account && !receive_address || (receive_address && receive_address.address === "unknown"))) {
+            return <div><Translate className="txtlabel cancel" content="gateway.unavailable" component="h4" /></div>;
+        }
+
+        if (isDeposit) {
             return (
                 <div className="Blocktrades__gateway grid-block no-padding no-margin">
                     <div className="small-12 medium-5">
@@ -210,23 +232,23 @@ class BlockTradesGatewayDepositRequest extends React.Component {
                                 <tbody>
                                     <tr>
                                         <Translate component="td" content="gateway.asset_to_deposit" />
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}>{this.props.deposit_asset}</td>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}>{this.props.deposit_asset}</td>
                                     </tr>
                                     <tr>
                                         <Translate component="td" content="gateway.asset_to_receive" />
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}><AssetName name={this.props.receive_asset.get("symbol")} replace={false} /></td>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}><AssetName name={this.props.receive_asset.get("symbol")} replace={false} /></td>
                                     </tr>
                                     <tr>
                                         <Translate component="td" content="gateway.intermediate" />
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}><LinkToAccountById account={this.props.issuer_account.get("id")} /></td>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}><LinkToAccountById account={this.props.issuer_account.get("id")} /></td>
                                     </tr>
                                     <tr>
                                         <Translate component="td" content="gateway.your_account" />
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}><LinkToAccountById account={this.props.account.get("id")} /></td>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}><LinkToAccountById account={this.props.account.get("id")} /></td>
                                     </tr>
                                     <tr>
                                         <td><Translate content="gateway.balance" />:</td>
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}>
                                             <AccountBalance
                                                 account={this.props.account.get("name")}
                                                 asset={this.props.receive_asset.get("symbol")}
@@ -241,23 +263,23 @@ class BlockTradesGatewayDepositRequest extends React.Component {
                     <div className="small-12 medium-7">
                         <Translate component="h4" content="gateway.deposit_inst" />
                         <label className="left-label"><Translate content="gateway.deposit_to" asset={this.props.deposit_asset} />:</label>
-                        <div style={{padding: "10px 0", fontSize: "1.1rem", fontWeight: "bold"}}>
-                            <table className="table">
-                                <tbody>
-                                    <tr>
-                                        <td>{deposit_address_fragment}</td>
-                                    </tr>
-                                    {deposit_memo ? (
-                                    <tr>
-                                        <td>memo: {deposit_memo}</td>
-                                    </tr>) : null}
-                                </tbody>
-                            </table>
-                            <div className="button-group" style={{paddingTop: 10}}>
-                                {deposit_address_fragment ? <div className="button" onClick={this.toClipboard.bind(this, clipboardText)}>Copy address</div> : null}
-                                {memoText ? <div className="button" onClick={this.toClipboard.bind(this, memoText)}>Copy memo</div> : null}
-                                <button className={"button"} onClick={requestDepositAddress.bind(null, this._getDepositObject())}><Translate content="gateway.generate_new" /></button>
+                        <label className="fz_12 left-label"><Translate content="gateway.deposit_notice_delay" /></label>
+                        <div>
+                            {emptyAddressDeposit ? <Translate content="gateway.please_generate_address" /> : deposit_address_fragment }
+                            <div>
+                                {deposit_memo && (<span>memo: {deposit_memo}</span>)}
                             </div>
+                            <div className="button-group" style={{paddingTop: 10}}>
+                                {deposit_address_fragment ? <div className="button" onClick={this.toClipboard.bind(this, clipboardText)}>
+                                    <Translate content="gateway.copy_address" />
+                                </div> : null}
+                                {memoText ? <div className="button" onClick={this.toClipboard.bind(this, memoText)}>
+                                    <Translate content="gateway.copy_memo" />
+                                </div> : null}
+                                <button className={"button spinner-button-circle"} onClick={this.requestDepositAddressLoad.bind(this)}>{indicatorButtonAddr ? <LoadingIndicator type="circle" /> : null}<Translate content="gateway.generate_new" /></button>
+                            </div>
+                            <Translate className="has-error fz_14" component="p" content="gateway.min_deposit_warning_amount" minDeposit={this.props.gateFee * 2} coin={this.props.deposit_asset}/>
+                            <Translate className="has-error fz_14" component="p" content="gateway.min_deposit_warning_asset" minDeposit={this.props.gateFee * 2} coin={this.props.deposit_asset}/>
                         </div>
                     </div>
                 </div>
@@ -272,19 +294,19 @@ class BlockTradesGatewayDepositRequest extends React.Component {
                                 <tbody>
                                     <tr>
                                         <Translate component="td" content="gateway.asset_to_withdraw" />
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}><AssetName name={this.props.receive_asset.get("symbol")} replace={false} /></td>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}><AssetName name={this.props.receive_asset.get("symbol")} replace={false} /></td>
                                     </tr>
                                     <tr>
                                         <Translate component="td" content="gateway.asset_to_receive" />
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}>{this.props.deposit_asset}</td>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}>{this.props.deposit_asset}</td>
                                     </tr>
                                     <tr>
                                         <Translate component="td" content="gateway.intermediate" />
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}><LinkToAccountById account={this.props.issuer_account.get("id")} /></td>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}><LinkToAccountById account={this.props.issuer_account.get("id")} /></td>
                                     </tr>
                                     <tr>
                                         <td><Translate content="gateway.balance" />:</td>
-                                        <td style={{fontWeight: "bold", color: "#4A90E2", textAlign: "right"}}>
+                                        <td style={{fontWeight: "bold", color: "#049cce", textAlign: "right"}}>
                                             <AccountBalance
                                                 account={this.props.account.get("name")}
                                                 asset={this.props.receive_asset.get("symbol")}
